@@ -34,6 +34,36 @@ const MarketShareChart: React.FC<MarketShareChartProps> = ({
   const [data, setData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [categoryLevel, setCategoryLevel] = useState<'1' | '2' | '3'>('1');
+  const [summary, setSummary] = useState<string>('');
+  const [isSummarizing, setIsSummarizing] = useState(false);
+
+  const getAISummary = async (chartData: any[]) => {
+    setIsSummarizing(true);
+    try {
+      const dataDescription = chartData.map(series => ({
+        category: series.name,
+        averageShare: series.avgShare.toFixed(1) + '%'
+      }));
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ chartData: dataDescription }),
+      });
+
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+      
+      setSummary(data.summary);
+    } catch (error) {
+      console.error('Error getting AI summary:', error);
+      setSummary('Unable to generate summary at this time.');
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -128,19 +158,30 @@ const MarketShareChart: React.FC<MarketShareChartProps> = ({
     });
 
     // Convert to Plotly format
-    const plotData = Array.from(categories).map(category => ({
-      x: Object.keys(monthlyData).sort(),
-      y: Object.keys(monthlyData).sort().map(month => {
-        const total = Object.values(monthlyData[month]).reduce((a, b) => a + b, 0);
-        return ((monthlyData[month][category] || 0) / total) * 100;
-      }),
-      name: category,
-      type: 'bar',
-      stackgroup: 'one',
-    }));
+    const plotData = Array.from(categories)
+      .filter(category => category && !category.startsWith('trace'))
+      .map(category => {
+        const monthlyShares = Object.keys(monthlyData).sort().map(month => {
+          const total = Object.values(monthlyData[month]).reduce((a, b) => a + b, 0);
+          return ((monthlyData[month][category] || 0) / total) * 100;
+        });
+        
+        const avgShare = monthlyShares.reduce((a, b) => a + b, 0) / monthlyShares.length;
+        
+        return {
+          x: Object.keys(monthlyData).sort(),
+          y: monthlyShares,
+          name: category,
+          type: 'bar',
+          stackgroup: 'one',
+          avgShare: avgShare,
+        };
+      })
+      .sort((a, b) => b.avgShare - a.avgShare);
 
     setData(plotData);
     setIsLoading(false);
+    getAISummary(plotData); // Get AI summary whenever data changes
   };
 
   if (isLoading) {
@@ -162,8 +203,21 @@ const MarketShareChart: React.FC<MarketShareChartProps> = ({
         </select>
       </div>
 
+      {/* Add AI Summary Section */}
+      <div className="bg-muted/50 p-4 rounded-lg">
+        <h4 className="text-sm font-medium mb-2">AI Analysis</h4>
+        {isSummarizing ? (
+          <p className="text-sm text-muted-foreground">Analyzing data...</p>
+        ) : (
+          <p className="text-sm">{summary}</p>
+        )}
+      </div>
+
       <Plot
-        data={data}
+        data={data.map(trace => ({
+          ...trace,
+          hovertemplate: '%{y:.1f}% - %{data.name}<extra></extra>',
+        }))}
         layout={{
           title: `Market Share by ${
             categoryLevel === '1' ? 'Top Level Categories' :
@@ -187,11 +241,20 @@ const MarketShareChart: React.FC<MarketShareChartProps> = ({
             xanchor: 'center',
             x: 0.5,
           },
+          hovermode: 'x unified', // Show all points at the same x-value
           paper_bgcolor: 'transparent',
           plot_bgcolor: 'transparent',
           font: { color: '#fff' },
           margin: { t: 50, r: 20, b: 100, l: 70 },
           height: 500,
+          hoverlabel: {
+            bgcolor: '#1f2937', // Dark background
+            bordercolor: '#374151', // Border color
+            font: { 
+              color: '#ffffff', // White text
+              size: 14 
+            },
+          },
         }}
         style={{ width: '100%' }}
         config={{ 
